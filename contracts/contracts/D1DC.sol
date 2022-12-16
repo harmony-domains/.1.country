@@ -5,6 +5,7 @@ pragma solidity ^0.8.17;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "./RegistrarController.sol";
 
 /**
     @title A subdomain manager contract for .1.country (D1DC - Dot 1 Dot Country)
@@ -21,6 +22,8 @@ contract D1DC is ERC721, Pausable, Ownable {
     uint32 public rentalPeriod;
     uint32 public priceMultiplier;
     address public revenueAccount;
+    address public registrarController;
+    RegistrarController private registrarControllerContract;
 
     // TODO remove nameExists and replace logic with renter not equal to zero address
     struct NameRecord {
@@ -40,8 +43,18 @@ contract D1DC is ERC721, Pausable, Ownable {
 
     bytes32[] public keys;
 
-    event NameRented(string indexed name, address indexed renter, uint256 price, string url);
-    event URLUpdated(string indexed name, address indexed renter, string oldUrl, string newUrl);
+    event NameRented(
+        string indexed name,
+        address indexed renter,
+        uint256 price,
+        string url
+    );
+    event URLUpdated(
+        string indexed name,
+        address indexed renter,
+        string oldUrl,
+        string newUrl
+    );
     event RevenueAccountChanged(address from, address to);
 
     //TODO create the EREC721 token at time of construction
@@ -51,19 +64,26 @@ contract D1DC is ERC721, Pausable, Ownable {
         uint256 _baseRentalPrice,
         uint32 _rentalPeriod,
         uint32 _priceMultiplier,
-        address _revenueAccount
+        address _revenueAccount,
+        address _registrarController
     ) ERC721(_name, _symbol) {
         baseRentalPrice = _baseRentalPrice;
         rentalPeriod = _rentalPeriod;
         priceMultiplier = _priceMultiplier;
         revenueAccount = _revenueAccount;
+        registrarController = _registrarController;
+        registrarControllerContract = RegistrarController(registrarController);
     }
 
-    function numRecords() public view returns (uint256){
+    function numRecords() public view returns (uint256) {
         return keys.length;
     }
 
-    function getRecordKeys(uint256 start, uint256 end) public view returns (bytes32[] memory){
+    function getRecordKeys(uint256 start, uint256 end)
+        public
+        view
+        returns (bytes32[] memory)
+    {
         require(end > start, "D1DC: end must be greater than start");
         bytes32[] memory slice = new bytes32[](end - start);
         for (uint256 i = start; i < end; i++) {
@@ -90,6 +110,14 @@ contract D1DC is ERC721, Pausable, Ownable {
         revenueAccount = _revenueAccount;
     }
 
+    function setRegistrarController(address _registrarController)
+        public
+        onlyOwner
+    {
+        registrarController = _registrarController;
+        registrarControllerContract = RegistrarController(registrarController);
+    }
+
     function pause() external onlyOwner {
         _pause();
     }
@@ -98,7 +126,10 @@ contract D1DC is ERC721, Pausable, Ownable {
         _unpause();
     }
 
-    function initialize(string[] calldata _names, NameRecord[] calldata _records) external onlyOwner {
+    function initialize(
+        string[] calldata _names,
+        NameRecord[] calldata _records
+    ) external onlyOwner {
         require(!initialized, "D1DC: already initialized");
         require(_names.length == _records.length, "D1DC: unequal length");
         for (uint256 i = 0; i < _records.length; i++) {
@@ -108,7 +139,10 @@ contract D1DC is ERC721, Pausable, Ownable {
             if (i >= 1 && bytes(nameRecords[key].prev).length == 0) {
                 nameRecords[key].prev = _names[i - 1];
             }
-            if (i < _records.length - 1 && bytes(nameRecords[key].next).length == 0) {
+            if (
+                i < _records.length - 1 &&
+                bytes(nameRecords[key].next).length == 0
+            ) {
                 nameRecords[key].next = _names[i + 1];
             }
         }
@@ -125,10 +159,17 @@ contract D1DC is ERC721, Pausable, Ownable {
         if (nameRecord.timeUpdated + rentalPeriod <= uint32(block.timestamp)) {
             return baseRentalPrice;
         }
-        return nameRecord.renter == msg.sender ? nameRecord.lastPrice : nameRecord.lastPrice * priceMultiplier;
+        return
+            nameRecord.renter == msg.sender
+                ? nameRecord.lastPrice
+                : nameRecord.lastPrice * priceMultiplier;
     }
 
-    function rent(string calldata name, string calldata url) public payable whenNotPaused {
+    function rent(string calldata name, string calldata url)
+        public
+        payable
+        whenNotPaused
+    {
         require(bytes(name).length <= 128, "D1DC: name too long");
         require(bytes(url).length <= 1024, "D1DC: url too long");
         uint256 tokenId = uint256(keccak256(bytes(name)));
@@ -158,16 +199,39 @@ contract D1DC is ERC721, Pausable, Ownable {
 
         uint256 excess = msg.value - price;
         if (excess > 0) {
-            (bool success,) = msg.sender.call{value : excess}("");
+            (bool success, ) = msg.sender.call{value: excess}("");
             require(success, "cannot refund excess");
         }
+        // registrarControllerContract.register(
+        //     name,
+        //     owner,
+        //     duration,
+        //     secret,
+        //     resolver,
+        //     data,
+        //     reverseRecord,
+        //     fuses,
+        //     wrapperExpiry
+        // );
         emit NameRented(name, msg.sender, price, url);
     }
 
-    function updateURL(string calldata name, string calldata url) public payable whenNotPaused {
-        require(nameRecords[keccak256(bytes(name))].renter == msg.sender, "D1DC: not owner");
+    function updateURL(string calldata name, string calldata url)
+        public
+        payable
+        whenNotPaused
+    {
+        require(
+            nameRecords[keccak256(bytes(name))].renter == msg.sender,
+            "D1DC: not owner"
+        );
         require(bytes(url).length <= 1024, "D1DC: url too long");
-        emit URLUpdated(name, msg.sender, nameRecords[keccak256(bytes(name))].url, url);
+        emit URLUpdated(
+            name,
+            msg.sender,
+            nameRecords[keccak256(bytes(name))].url,
+            url
+        );
         nameRecords[keccak256(bytes(name))].url = url;
     }
 
@@ -176,14 +240,19 @@ contract D1DC is ERC721, Pausable, Ownable {
         address to,
         uint256 firstTokenId,
         uint256 batchSize
-    ) internal override virtual {
+    ) internal virtual override {
         NameRecord storage nameRecord = nameRecords[bytes32(firstTokenId)];
         nameRecord.renter = to;
     }
 
     function withdraw() external {
-        require(msg.sender == owner() || msg.sender == revenueAccount, "D1DC: must be owner or revenue account");
-        (bool success,) = revenueAccount.call{value : address(this).balance}("");
+        require(
+            msg.sender == owner() || msg.sender == revenueAccount,
+            "D1DC: must be owner or revenue account"
+        );
+        (bool success, ) = revenueAccount.call{value: address(this).balance}(
+            ""
+        );
         require(success, "D1DC: failed to withdraw");
     }
 }
